@@ -1,0 +1,146 @@
+
+bash <<'INSTALLER'
+set -e
+
+BIN="$HOME/.local/bin"
+mkdir -p "$BIN"
+
+# 1. Connect the current directory to a GitHub repository
+cat > "$BIN/gitconnect" <<'SCRIPT'
+#!/bin/bash
+set -e
+if [ -z "${1:-}" ]; then
+    echo "Usage: gitconnect git@github.com:USER/REPO.git"
+    exit 1
+fi
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || git init
+if git remote get-url origin >/dev/null 2>&1; then
+    git remote set-url origin "$1"
+else
+    git remote add origin "$1"
+fi
+echo "Connected:"
+git remote -v
+SCRIPT
+
+# 2. Commit and push
+cat > "$BIN/gitpush" <<'SCRIPT'
+#!/bin/bash
+set -e
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: Not inside a Git repository."
+    exit 1
+}
+git add -A
+if git diff --cached --quiet; then
+    echo "No changes to commit."
+else
+    git commit -m "${1:-Update project}"
+fi
+git push -u origin HEAD
+SCRIPT
+
+# 3. Pull remote changes
+cat > "$BIN/gitpull" <<'SCRIPT'
+#!/bin/bash
+set -e
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: Not inside a Git repository."
+    exit 1
+}
+git pull --rebase
+SCRIPT
+
+# 4. Hard reset by number of commits
+cat > "$BIN/gitundo" <<'SCRIPT'
+#!/bin/bash
+set -e
+N="${1:-}"
+if ! [[ "$N" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Usage: gitundo NUMBER"
+    echo "Example: gitundo 2"
+    exit 1
+fi
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "Error: Not inside a Git repository."
+    exit 1
+}
+TARGET="HEAD~$N"
+git rev-parse --verify "$TARGET^{commit}" >/dev/null 2>&1 || {
+    echo "Error: Not enough previous commits."
+    exit 1
+}
+echo "Current commit:"
+git log -1 --oneline
+echo "Reset target:"
+git log -1 --oneline "$TARGET"
+echo
+echo "WARNING: This discards uncommitted changes."
+read -r -p 'Type YES to hard reset: ' CONFIRM
+if [ "$CONFIRM" = "YES" ]; then
+    git reset --hard "$TARGET"
+    echo "Reset complete. GitHub's remote history is unchanged."
+else
+    echo "Cancelled."
+fi
+SCRIPT
+
+# 5. Create or display the public SSH key
+cat > "$BIN/creategitkey" <<'SCRIPT'
+#!/bin/bash
+set -e
+KEY="$HOME/.ssh/id_ed25519"
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+
+if [ -f "$KEY" ] && [ -f "$KEY.pub" ]; then
+    echo "Existing SSH key found; keeping it."
+elif [ -e "$KEY" ] || [ -e "$KEY.pub" ]; then
+    echo "Key files are incomplete. Nothing overwritten."
+    echo "Check your ~/.ssh directory manually."
+    exit 1
+else
+    read -r -p "Enter your GitHub email: " EMAIL
+    if [ -z "$EMAIL" ]; then
+        echo "Email cannot be empty."
+        exit 1
+    fi
+    ssh-keygen -t ed25519 -C "$EMAIL" -f "$KEY"
+fi
+
+echo
+echo "===== YOUR PUBLIC SSH KEY ====="
+cat "$KEY.pub"
+echo
+echo "===== END OF PUBLIC KEY ====="
+echo
+echo "Add this public key at:"
+echo "https://github.com/settings/keys"
+echo
+echo "Then test with: ssh -T git@github.com"
+SCRIPT
+
+chmod +x "$BIN/gitconnect" "$BIN/gitpush" \
+    "$BIN/gitpull" "$BIN/gitundo" "$BIN/creategitkey"
+
+# Add the command directory to PATH for future Bash sessions
+touch "$HOME/.bashrc"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" ||
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+
+export PATH="$HOME/.local/bin:$PATH"
+
+echo
+echo "======================================"
+echo " Git Toolkit installed successfully!"
+echo "======================================"
+echo
+echo "Commands available:"
+echo "  creategitkey"
+echo "  gitconnect git@github.com:USER/REPO.git"
+echo '  gitpush "Updated GUI"'
+echo "  gitpull"
+echo "  gitundo 1"
+echo
+echo "Restart your terminal if commands aren't found."
+INSTALLER
